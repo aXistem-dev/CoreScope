@@ -212,7 +212,7 @@
       _data = d;
       if (!withGps || !d) return null;
       return Promise.all([
-        fetch('/locode-coords.json').then(function (r) { return r.json(); }),
+        window.MC_fetchStatic('/locode-coords.json').then(function (r) { return r.json(); }),
         typeof fetchAllNodes === 'function'
           ? fetchAllNodes('&sortBy=lastSeen', { ttl: 60000 })
           : Promise.resolve(null),

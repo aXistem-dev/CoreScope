@@ -349,7 +349,8 @@
   "overrides": [
     {
       "files": [
-        "public/api-base.js"
+        "public/api-base.js",
+        "public/static-asset.js"
       ],
       "rules": {
         "no-restricted-syntax": "off"

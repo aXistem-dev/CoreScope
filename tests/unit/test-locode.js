@@ -17,7 +17,7 @@ function makeSandbox() {
       body: { appendChild: () => {} },
       addEventListener: () => {},
     },
-    fetch: () => Promise.resolve({ json: () => Promise.resolve({}) }),
+    MC_fetchStatic: () => Promise.resolve({ json: () => Promise.resolve({}) }),
     console,
   };
   ctx.window = ctx;

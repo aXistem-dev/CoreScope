@@ -98,7 +98,7 @@ let _locodePromise = null;
 
 function _ensureData() {
   if (_locodeData) return Promise.resolve();
-  if (!_locodePromise) _locodePromise = fetch('/locode.json').then(r => r.json()).then(d => { _locodeData = d; });
+  if (!_locodePromise) _locodePromise = window.MC_fetchStatic('/locode.json').then(r => r.json()).then(d => { _locodeData = d; });
   return _locodePromise;
 }
 
