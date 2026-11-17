@@ -60,7 +60,7 @@
     var managers = Array.isArray(c.managers) ? c.managers : [];
     if (!c.owner && !managers.length) return '';
     var link = ' · <a href="' + escapeHtml(linkFor(source, node)) +
-      '" target="_blank" rel="noopener noreferrer">view on meshmap</a>';
+      '" target="_blank" rel="noopener noreferrer">View on #BEmesh map</a>';
     var html = '';
     if (c.owner) {
       html += row('Owner', (c.owner.name ? '@' + escapeHtml(String(c.owner.name)) : 'claimed') + link);
