@@ -46,7 +46,7 @@ function load(opts) {
   vm.createContext(ctx);
   vm.runInContext(src('public/repeater-info.js'), ctx);
   const fire = (t) => (listeners[t] || []).forEach((fn) => fn({}));
-  return { R: ctx.CSRepeaterInfo, calls, auth: CSAuth, fire };
+  return { R: ctx.CSRepeaterInfo, calls, auth: CSAuth, fire, ctx };
 }
 
 const INFO = (o) => Object.assign({ pubkey: PK, heightM: null, gainDbi: 0, status: null, power: null,
@@ -263,6 +263,20 @@ test('no draft after Cancel, a save, a hashchange, another repeater or lost edit
   l = load(opts); await open(l);
   l.auth.request = () => Promise.resolve({ ok: true, status: 200, data: INFO({ canEdit: false }) });
   assert(!(await remountShowsForm(l)), 'draft shown without edit rights');
+});
+// Fork-local (meshmap owner): extra rows from meshmap-owner.js go inside the list.
+test('extra rows land inside the list and replace "No details yet"', () => {
+  const h = T.viewHtml(INFO(), null, '<div class="repeater-info-row x"></div>');
+  assert(/<dl[^>]*>.*class="repeater-info-row x".*<\/dl>/.test(h), h);
+  assert(!h.includes('No details yet'), h);
+});
+test('mount waits for CSMeshmapOwner and renders its row', async () => {
+  const f = mountFlow({ info: INFO() });
+  let rowFor = null;
+  f.l.ctx.CSMeshmapOwner = { ready: () => Promise.resolve(), rowHtml: (n) => { rowFor = n.public_key; return '<div class="repeater-info-row mm"></div>'; } };
+  await f.l.R.mount(f.el, { public_key: PK, role: 'repeater' });
+  assert.strictEqual(rowFor, PK);
+  assert(f.el.innerHTML.includes('repeater-info-row mm'), f.el.innerHTML);
 });
 test('anonymous visitor sees one login hint, a logged-in user does not', () => {
   const anon = load({ user: null }).R._test.viewHtml(INFO(), null);

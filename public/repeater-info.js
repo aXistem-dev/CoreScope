@@ -20,7 +20,7 @@
     return isNaN(d.getTime()) ? String(s) : d.toLocaleDateString();
   }
 
-  function viewHtml(info, user) {
+  function viewHtml(info, user, extraRows) {
     var rows = '';
     var claimers = info.claimers || [];
     if (has(info.heightM)) rows += row('Antenna height', esc(info.heightM + ' m'));
@@ -34,6 +34,7 @@
         ? row('Last edited by', esc(info.updatedBy) + ', ' + esc(fmtDate(info.updatedAt)))
         : row('Last edited', esc(fmtDate(info.updatedAt)));
     }
+    rows += extraRows || ''; // Fork-local (meshmap owner): rows from meshmap-owner.js
     var html = rows ? '<dl class="repeater-info-list">' + rows + '</dl>' : '<p class="text-muted repeater-info-empty">No details yet.</p>';
     if (user) {
       html += '<div class="repeater-info-actions">';
@@ -129,6 +130,7 @@
     var pk = String(node.public_key || '').toLowerCase();
     var base = '/api/repeaters/' + encodeURIComponent(pk);
     var slot = el.id || '';
+    var mm = window.CSMeshmapOwner; // Fork-local (meshmap owner)
     var info = null;
 
     function keep() {
@@ -139,7 +141,7 @@
       var user = auth.user();
       if (mode !== 'edit') delete drafts[slot];
       el.innerHTML = '<h4>Repeater info</h4>' +
-        (mode === 'edit' ? formHtml(values || info) : mode === 'confirm' ? confirmHtml() : viewHtml(info, user));
+        (mode === 'edit' ? formHtml(values || info) : mode === 'confirm' ? confirmHtml() : viewHtml(info, user, mm ? mm.rowHtml(node) : ''));
       if (mode === 'edit' && !values) keep();
     }
     var busy = false;
@@ -182,7 +184,9 @@
     return Promise.resolve(auth.ready()).then(function () {
       if (!auth.isEnabled()) return;
       bind();
-      return auth.request('GET', base + '/info').then(function (r) {
+      // Fork-local (meshmap owner): wait for the owner list alongside the GET.
+      return Promise.all([auth.request('GET', base + '/info'), mm ? mm.ready() : null]).then(function (res) {
+        var r = res[0];
         if (!r.ok) return;
         info = r.data;
         var d = drafts[slot];
