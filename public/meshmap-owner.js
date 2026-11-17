@@ -1,8 +1,10 @@
-/* Fork-local (meshmap owner): the Discord username of a repeater's owner on
- * meshmap.radio-actief.be, as an extra row in the Repeater info section.
- * One fetch of /api/meshmap/owners per page load (the server caches the
- * meshmap list); rowHtml returns '' when the repeater has no known owner or
- * the feature is off. Every dynamic value goes through escapeHtml. */
+/* Fork-local (meshmap owner): who claimed a repeater on meshmap.radio-actief.be
+ * (owner and managers), as extra rows in the Repeater info section. One fetch
+ * of /api/meshmap/owners per page load (the server caches the map's partner
+ * claims feed); a failed fetch is retried on the next mount. rowHtml returns
+ * '' when nobody claimed the repeater or the feature is off. A person who
+ * hides their name shows as "claimed". Every dynamic value goes through
+ * escapeHtml. */
 (function () {
   'use strict';
   var byKey = {};
@@ -19,11 +21,13 @@
         // No usable list yet (fetch failed, or the server has not fetched
         // meshmap yet): let the next mount try again instead of hiding the
         // owners for the rest of the session.
-        if (!d || !Array.isArray(d.owners) || !d.fetchedAt) { loading = null; return; }
+        if (!d || !Array.isArray(d.nodes) || !d.fetchedAt) { loading = null; return; }
         source = String(d.source || '');
-        d.owners.forEach(function (o) {
-          if (o && o.pubkey && o.discordName) byKey[String(o.pubkey).toLowerCase()] = String(o.discordName);
+        var next = {};
+        d.nodes.forEach(function (n) {
+          if (n && n.pubkey) next[String(n.pubkey).toLowerCase()] = n;
         });
+        byKey = next;
       }, function () { loading = null; });
     }
     return loading;
@@ -36,11 +40,33 @@
     return base + '/?' + (hasPos ? 'zoom=15&lat=' + lat + '&lon=' + lon + '&' : '') + 'node=' + pk;
   }
 
+  function row(label, value) {
+    return '<div class="repeater-info-row"><dt>' + label + '</dt><dd>' + value + '</dd></div>';
+  }
+
+  function managersText(managers) {
+    var named = [], hidden = 0;
+    managers.forEach(function (m) {
+      var name = m && m.name ? String(m.name) : '';
+      if (name) named.push('@' + escapeHtml(name)); else hidden++;
+    });
+    if (hidden) named.push(hidden + ' with a hidden name');
+    return named.join(', ');
+  }
+
   function rowHtml(node) {
-    var name = node && byKey[String(node.public_key || '').toLowerCase()];
-    if (!name || !source) return '';
-    return '<div class="repeater-info-row"><dt>Owner (Discord)</dt><dd>@' + escapeHtml(name) +
-      ' · <a href="' + escapeHtml(linkFor(source, node)) + '" target="_blank" rel="noopener noreferrer">view on meshmap</a></dd></div>';
+    var c = node && byKey[String(node.public_key || '').toLowerCase()];
+    if (!c || !source) return '';
+    var managers = Array.isArray(c.managers) ? c.managers : [];
+    if (!c.owner && !managers.length) return '';
+    var link = ' · <a href="' + escapeHtml(linkFor(source, node)) +
+      '" target="_blank" rel="noopener noreferrer">view on meshmap</a>';
+    var html = '';
+    if (c.owner) {
+      html += row('Owner', (c.owner.name ? '@' + escapeHtml(String(c.owner.name)) : 'claimed') + link);
+    }
+    if (managers.length) html += row('Managers', managersText(managers) + (c.owner ? '' : link));
+    return html;
   }
 
   window.CSMeshmapOwner = { ready: ready, rowHtml: rowHtml, _test: { linkFor: linkFor } };

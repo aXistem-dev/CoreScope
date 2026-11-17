@@ -3,6 +3,7 @@ package main
 // Fork-local (meshmap owner): tests for meshmap_owners.go.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -15,54 +16,67 @@ import (
 
 const mmPK = "efef7943505052b47f1809488ea4b4d3942d4ed72d2b1953b90a9f5e62a65fb5"
 
-func TestParseMeshmapOwnersFilters(t *testing.T) {
+func TestParseMeshmapClaims(t *testing.T) {
 	long := strings.Repeat("é", 70)
 	upper := strings.ToUpper(strings.Repeat("ab", 32))
-	raw := `[
-	 {"public_key":"` + mmPK + `","claimed":true,"discord_owner_name":"erwinfiten"},
-	 {"public_key":"` + strings.Repeat("11", 32) + `","claimed":false,"discord_owner_name":"notclaimed"},
-	 {"public_key":"` + strings.Repeat("22", 32) + `","claimed":true,"discord_owner_name":null},
-	 {"public_key":"` + strings.Repeat("33", 32) + `","claimed":true,"discord_owner_name":"   "},
-	 {"public_key":"` + upper + `","claimed":true,"discord_owner_name":"upper"},
-	 {"public_key":"` + strings.Repeat("4", 63) + `","claimed":true,"discord_owner_name":"short"},
-	 {"public_key":"` + strings.Repeat("55", 32) + `","claimed":true,"discord_owner_name":"a\nb<i>"},
-	 {"public_key":"` + strings.Repeat("66", 32) + `","claimed":true,"discord_owner_name":"` + long + `"}
-	]`
-	got, err := parseMeshmapOwners([]byte(raw))
+	raw := `{"version":1,"generatedAt":"2026-11-17T10:00:00Z","claims":[
+	 {"publicKey":"` + mmPK + `","role":"owner","subject":"s1","displayName":"erwinfiten","since":null},
+	 {"publicKey":"` + mmPK + `","role":"manager","subject":"s2","displayName":"zed"},
+	 {"publicKey":"` + mmPK + `","role":"manager","subject":"s3","displayName":null},
+	 {"publicKey":"` + mmPK + `","role":"manager","subject":"s4","displayName":"amy"},
+	 {"publicKey":"` + strings.Repeat("22", 32) + `","role":"owner","subject":"s5","displayName":null},
+	 {"publicKey":"` + strings.Repeat("33", 32) + `","role":"owner","subject":"s6","displayName":"   "},
+	 {"publicKey":"` + upper + `","role":"owner","subject":"s7","displayName":"upper"},
+	 {"publicKey":"` + strings.Repeat("4", 63) + `","role":"owner","subject":"s8","displayName":"short"},
+	 {"publicKey":"` + strings.Repeat("55", 32) + `","role":"owner","subject":"s9","displayName":"a\nb<i>"},
+	 {"publicKey":"` + strings.Repeat("66", 32) + `","role":"owner","subject":"sa","displayName":"` + long + `"},
+	 {"publicKey":"` + strings.Repeat("77", 32) + `","role":"viewer","subject":"sb","displayName":"x"},
+	 {"publicKey":"` + strings.Repeat("88", 32) + `","role":"manager","subject":"sc","displayName":"onlymgr"}
+	]}`
+	got, err := parseMeshmapClaims([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []meshmapOwner{
-		{Pubkey: strings.Repeat("55", 32), DiscordName: "ab<i>"},
-		{Pubkey: strings.Repeat("66", 32), DiscordName: strings.Repeat("é", 64)},
-		{Pubkey: strings.Repeat("ab", 32), DiscordName: "upper"},
-		{Pubkey: mmPK, DiscordName: "erwinfiten"},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d owners: %+v", len(got), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("owner %d = %+v, want %+v", i, got[i], want[i])
-		}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(got)
+	b := bytes.TrimSpace(buf.Bytes())
+	want := `[` +
+		`{"pubkey":"` + strings.Repeat("22", 32) + `","owner":{"name":""},"managers":[]},` +
+		`{"pubkey":"` + strings.Repeat("33", 32) + `","owner":{"name":""},"managers":[]},` +
+		`{"pubkey":"` + strings.Repeat("55", 32) + `","owner":{"name":"ab<i>"},"managers":[]},` +
+		`{"pubkey":"` + strings.Repeat("66", 32) + `","owner":{"name":"` + strings.Repeat("é", 64) + `"},"managers":[]},` +
+		`{"pubkey":"` + strings.Repeat("88", 32) + `","owner":null,"managers":[{"name":"onlymgr"}]},` +
+		`{"pubkey":"` + strings.Repeat("ab", 32) + `","owner":{"name":"upper"},"managers":[]},` +
+		`{"pubkey":"` + mmPK + `","owner":{"name":"erwinfiten"},"managers":[{"name":"amy"},{"name":"zed"},{"name":""}]}` +
+		`]`
+	if string(b) != want {
+		t.Fatalf("got  %s\nwant %s", b, want)
 	}
 }
 
-func TestParseMeshmapOwnersBadJSON(t *testing.T) {
-	for _, raw := range []string{`{`, `{"a":1}`, ``} {
-		if _, err := parseMeshmapOwners([]byte(raw)); err == nil {
+func TestParseMeshmapClaimsBadJSON(t *testing.T) {
+	for _, raw := range []string{`{`, `[]`, `{"version":1}`, `null`, ``} {
+		if _, err := parseMeshmapClaims([]byte(raw)); err == nil {
 			t.Fatalf("no error for %q", raw)
 		}
 	}
 }
 
-// fakeMeshmap serves /api/v1/belgian-nodes; respond decides each answer.
+// fakeMeshmap serves /api/v1/partner/claims; respond decides each answer.
+// A request without the test secret gets the contract's 401.
 func fakeMeshmap(t *testing.T, respond func(w http.ResponseWriter, r *http.Request, n int)) *httptest.Server {
 	t.Helper()
 	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/belgian-nodes" {
+		if r.URL.Path != "/api/v1/partner/claims" {
 			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+mmSecret {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"invalid_client"}`))
 			return
 		}
 		respond(w, r, int(calls.Add(1)))
@@ -71,7 +85,9 @@ func fakeMeshmap(t *testing.T, respond func(w http.ResponseWriter, r *http.Reque
 	return ts
 }
 
-const oneOwner = `[{"public_key":"` + mmPK + `","claimed":true,"discord_owner_name":"erwinfiten"}]`
+const mmSecret = "test-secret-0123456789abcdef0123456789"
+
+const oneOwner = `{"version":1,"claims":[{"publicKey":"` + mmPK + `","role":"owner","subject":"s1","displayName":"erwinfiten"}]}`
 
 func TestMeshmapOwnersFetchETag(t *testing.T) {
 	var sentINM string
@@ -84,10 +100,10 @@ func TestMeshmapOwnersFetchETag(t *testing.T) {
 			sentINM = r.Header.Get("If-None-Match")
 			w.WriteHeader(http.StatusNotModified)
 		default:
-			w.Write([]byte(`[]`))
+			w.Write([]byte(`{"version":1,"claims":[]}`))
 		}
 	})
-	c := newMeshmapOwnersCache(ts.URL, time.Hour)
+	c := newMeshmapOwnersCache(ts.URL, mmSecret, time.Hour)
 	ctx := context.Background()
 	if err := c.fetchOnce(ctx); err != nil {
 		t.Fatal(err)
@@ -98,14 +114,14 @@ func TestMeshmapOwnersFetchETag(t *testing.T) {
 	if sentINM != `"v1"` {
 		t.Fatalf("If-None-Match = %q", sentINM)
 	}
-	if s := c.snapshot(); len(s.Owners) != 1 || s.Owners[0].DiscordName != "erwinfiten" {
-		t.Fatalf("304 changed the map: %+v", s.Owners)
+	if s := c.snapshot(); len(s.Nodes) != 1 || s.Nodes[0].Owner == nil || s.Nodes[0].Owner.Name != "erwinfiten" {
+		t.Fatalf("304 changed the map: %+v", s.Nodes)
 	}
 	if err := c.fetchOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if s := c.snapshot(); len(s.Owners) != 0 {
-		t.Fatalf("empty list kept owners: %+v", s.Owners)
+	if s := c.snapshot(); len(s.Nodes) != 0 {
+		t.Fatalf("empty list kept owners: %+v", s.Nodes)
 	}
 }
 
@@ -117,12 +133,12 @@ func TestMeshmapOwnersFetchFailureKeepsMap(t *testing.T) {
 		case 2:
 			w.WriteHeader(http.StatusInternalServerError)
 		case 3:
-			w.Write([]byte("[" + strings.Repeat(" ", maxMeshmapOwnersBytes) + "]"))
+			w.Write([]byte(`{"claims":[` + strings.Repeat(" ", maxMeshmapOwnersBytes) + `]}`))
 		default:
 			w.Write([]byte(`{`))
 		}
 	})
-	c := newMeshmapOwnersCache(ts.URL, time.Hour)
+	c := newMeshmapOwnersCache(ts.URL, mmSecret, time.Hour)
 	ctx := context.Background()
 	if err := c.fetchOnce(ctx); err != nil {
 		t.Fatal(err)
@@ -131,8 +147,8 @@ func TestMeshmapOwnersFetchFailureKeepsMap(t *testing.T) {
 		if err := c.fetchOnce(ctx); err == nil {
 			t.Fatalf("fetch %d: no error", i+2)
 		}
-		if s := c.snapshot(); len(s.Owners) != 1 {
-			t.Fatalf("fetch %d dropped the map: %+v", i+2, s.Owners)
+		if s := c.snapshot(); len(s.Nodes) != 1 {
+			t.Fatalf("fetch %d dropped the map: %+v", i+2, s.Nodes)
 		}
 	}
 }
@@ -147,13 +163,13 @@ func TestMeshmapOwnersRunRetriesFirstFetch(t *testing.T) {
 		}
 		w.Write([]byte(oneOwner))
 	})
-	c := newMeshmapOwnersCache(ts.URL, time.Hour)
+	c := newMeshmapOwnersCache(ts.URL, mmSecret, time.Hour)
 	c.retryBase = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	c.run(ctx)
 	deadline := time.Now().Add(3 * time.Second)
-	for len(c.snapshot().Owners) == 0 {
+	for len(c.snapshot().Nodes) == 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("no owners 3s after start: first fetch not retried before the refresh interval")
 		}
@@ -171,14 +187,14 @@ func TestMeshmapOwnersRoute(t *testing.T) {
 	}
 
 	ts := fakeMeshmap(t, func(w http.ResponseWriter, r *http.Request, n int) { w.Write([]byte(oneOwner)) })
-	srv.meshmapOwners = newMeshmapOwnersCache(ts.URL, time.Hour)
+	srv.meshmapOwners = newMeshmapOwnersCache(ts.URL, mmSecret, time.Hour)
 
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest("GET", "/api/meshmap/owners", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("before first fetch: status %d", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), `"owners":[]`) || !strings.Contains(w.Body.String(), `"fetchedAt":null`) {
+	if !strings.Contains(w.Body.String(), `"nodes":[]`) || !strings.Contains(w.Body.String(), `"fetchedAt":null`) {
 		t.Fatalf("empty body = %s", w.Body.String())
 	}
 
@@ -191,26 +207,34 @@ func TestMeshmapOwnersRoute(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Owners) != 1 || resp.Owners[0].Pubkey != mmPK || resp.FetchedAt == nil || resp.Source != ts.URL {
+	if strings.Contains(w.Body.String(), mmSecret) {
+		t.Fatal("secret leaked into the API answer")
+	}
+	if len(resp.Nodes) != 1 || resp.Nodes[0].Pubkey != mmPK || resp.FetchedAt == nil || resp.Source != ts.URL {
 		t.Fatalf("resp = %s", w.Body.String())
 	}
 }
 
 func TestMeshmapOwnersConfigDefaults(t *testing.T) {
 	var cfg Config
-	if err := json.Unmarshal([]byte(`{"meshmapOwners":{"enabled":true}}`), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(`{"meshmapOwners":{"enabled":true,"secret":" s3cret "}}`), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	url, refresh, ok := cfg.MeshmapOwners.resolve()
-	if !ok || url != "https://meshmap.radio-actief.be" || refresh != time.Hour {
-		t.Fatalf("defaults = %q %v %v", url, refresh, ok)
+	url, secret, refresh, ok := cfg.MeshmapOwners.resolve()
+	if !ok || url != "https://meshmap.radio-actief.be" || secret != "s3cret" || refresh != time.Hour {
+		t.Fatalf("defaults = %q %q %v %v", url, secret, refresh, ok)
 	}
+	cfg.MeshmapOwners.Secret = ""
+	if _, _, _, ok := cfg.MeshmapOwners.resolve(); ok {
+		t.Fatal("enabled without a secret resolved as on")
+	}
+	cfg.MeshmapOwners.Secret = "s3cret"
 	cfg.MeshmapOwners.Enabled = false
-	if _, _, ok := cfg.MeshmapOwners.resolve(); ok {
+	if _, _, _, ok := cfg.MeshmapOwners.resolve(); ok {
 		t.Fatal("disabled config resolved as on")
 	}
 	var nilCfg *MeshmapOwnersConfig
-	if _, _, ok := nilCfg.resolve(); ok {
+	if _, _, _, ok := nilCfg.resolve(); ok {
 		t.Fatal("nil config resolved as on")
 	}
 }

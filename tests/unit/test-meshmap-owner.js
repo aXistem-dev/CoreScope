@@ -41,35 +41,64 @@ function load(answer) {
   vm.runInContext(src('public/meshmap-owner.js'), ctx);
   return { M: ctx.CSMeshmapOwner, calls };
 }
-const owners = (list) => ({ body: { owners: list, fetchedAt: '2026-11-17T10:00:00Z', source: SOURCE } });
+const feed = (nodes) => ({ body: { nodes, fetchedAt: '2026-11-17T10:00:00Z', source: SOURCE } });
+const node = (owner, managers) => ({ pubkey: PK, owner: owner == null ? null : { name: owner }, managers: (managers || []).map((n) => ({ name: n })) });
 
-test('row for a known pubkey: label, @name and a safe meshmap link', async () => {
-  const l = load(owners([{ pubkey: PK, discordName: 'erwinfiten' }]));
+test('owner row: label, @name and a safe meshmap link', async () => {
+  const l = load(feed([node('erwinfiten')]));
   await l.M.ready();
   const h = l.M.rowHtml({ public_key: PK, lat: 51.1378, lon: 5.5902 });
-  assert(h.includes('Owner (Discord)'), h);
+  assert(h.includes('<dt>Owner</dt>'), h);
   assert(h.includes('@erwinfiten'), h);
   assert(h.includes('view on meshmap'), h);
   assert(h.includes('target="_blank"') && h.includes('rel="noopener noreferrer"'), h);
-  assert(h.includes('<dt>') && h.includes('<dd>'), 'row must fit the repeater-info <dl>: ' + h);
+  assert(!h.includes('Managers'), 'no managers row without managers: ' + h);
 });
 
-test('owner name is escaped', async () => {
-  const l = load(owners([{ pubkey: PK, discordName: '<img src=x onerror=1>' }]));
+test('hidden owner name shows "claimed" without a name', async () => {
+  const l = load(feed([node('')]));
+  await l.M.ready();
+  const h = l.M.rowHtml({ public_key: PK });
+  assert(h.includes('<dt>Owner</dt>') && h.includes('claimed'), h);
+  assert(!h.includes('@'), h);
+  assert(h.includes('view on meshmap'), h);
+});
+
+test('managers row lists named managers and counts hidden ones', async () => {
+  const l = load(feed([node('erwinfiten', ['amy', 'zed', ''])]));
+  await l.M.ready();
+  const h = l.M.rowHtml({ public_key: PK });
+  assert(h.includes('<dt>Managers</dt>'), h);
+  assert(h.includes('@amy, @zed'), h);
+  assert(h.includes('1 with a hidden name'), h);
+  assert.strictEqual(h.split('view on meshmap').length - 1, 1, 'one meshmap link: ' + h);
+});
+
+test('only managers, no owner: managers row carries the link', async () => {
+  const l = load(feed([node(null, ['amy'])]));
+  await l.M.ready();
+  const h = l.M.rowHtml({ public_key: PK });
+  assert(!h.includes('<dt>Owner</dt>'), h);
+  assert(h.includes('<dt>Managers</dt>') && h.includes('@amy') && h.includes('view on meshmap'), h);
+});
+
+test('names are escaped', async () => {
+  const l = load(feed([node('<img src=x onerror=1>', ['<b>m</b>'])]));
   await l.M.ready();
   const h = l.M.rowHtml({ public_key: PK });
   assert(!h.includes('<img') && h.includes('&lt;img'), h);
+  assert(!h.includes('<b>') && h.includes('&lt;b&gt;'), h);
 });
 
 test('unknown pubkey gives no row; an uppercase node key still matches', async () => {
-  const l = load(owners([{ pubkey: PK, discordName: 'erwinfiten' }]));
+  const l = load(feed([node('erwinfiten')]));
   await l.M.ready();
   assert.strictEqual(l.M.rowHtml({ public_key: 'cd'.repeat(32) }), '');
   assert(l.M.rowHtml({ public_key: PK.toUpperCase() }).includes('@erwinfiten'));
 });
 
 test('link uses the source from the API, with and without a position', () => {
-  const T = load(owners([])).M._test;
+  const T = load(feed([])).M._test;
   assert.strictEqual(T.linkFor(SOURCE, { public_key: PK, lat: 51.1378, lon: 5.5902 }),
     SOURCE + '/?zoom=15&lat=51.1378&lon=5.5902&node=' + PK);
   assert.strictEqual(T.linkFor(SOURCE, { public_key: PK }), SOURCE + '/?node=' + PK);
@@ -77,8 +106,14 @@ test('link uses the source from the API, with and without a position', () => {
     '0,0 is "no position" in CoreScope');
 });
 
+test('a node that left the feed has no row', async () => {
+  const l = load(feed([]));
+  await l.M.ready();
+  assert.strictEqual(l.M.rowHtml({ public_key: PK }), '');
+});
+
 test('ready() fetches once after a good answer', async () => {
-  const l = load(owners([{ pubkey: PK, discordName: 'erwinfiten' }]));
+  const l = load(feed([node('erwinfiten')]));
   await Promise.all([l.M.ready(), l.M.ready()]);
   await l.M.ready();
   assert.strictEqual(l.calls.length, 1);
@@ -98,7 +133,7 @@ test('a failed fetch resolves, shows no row, and the next ready() tries again', 
 });
 
 test('an answer from before the first server fetch (fetchedAt null) is retried', async () => {
-  const l = load({ body: { owners: [], fetchedAt: null, source: SOURCE } });
+  const l = load({ body: { nodes: [], fetchedAt: null, source: SOURCE } });
   await l.M.ready();
   await l.M.ready();
   assert.strictEqual(l.calls.length, 2);

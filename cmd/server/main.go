@@ -465,12 +465,14 @@ func main() {
 	}
 
 	// Fork-local (meshmap owner): owner names from meshmap.radio-actief.be.
-	if mmURL, mmRefresh, ok := cfg.MeshmapOwners.resolve(); ok {
-		srv.meshmapOwners = newMeshmapOwnersCache(mmURL, mmRefresh)
+	if mmURL, mmSecret, mmRefresh, ok := cfg.MeshmapOwners.resolve(); ok {
+		srv.meshmapOwners = newMeshmapOwnersCache(mmURL, mmSecret, mmRefresh)
 		mmCtx, stopMeshmapOwners := context.WithCancel(context.Background())
 		srv.meshmapOwners.run(mmCtx)
 		defer stopMeshmapOwners()
 		log.Printf("[meshmap] owner names enabled (source=%s, refresh=%s)", mmURL, mmRefresh)
+	} else if cfg.MeshmapOwners != nil && cfg.MeshmapOwners.Enabled {
+		log.Printf("[meshmap] meshmapOwners.enabled is set but meshmapOwners.secret is empty; owner names stay off")
 	}
 
 	// Radio line-of-sight profiles and the repeater planner, over one shared

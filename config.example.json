@@ -373,8 +373,9 @@
   "meshmapOwners": {
     "enabled": false,
     "url": "https://meshmap.radio-actief.be",
+    "secret": "",
     "refreshMinutes": 60,
-    "_comment": "Fork-local. Shows the Discord username of a repeater's owner from the public node list of meshmap.radio-actief.be in the Repeater info section (needs userManagement). Fetched every refreshMinutes with If-None-Match; a failed fetch keeps the last list. Off by default."
+    "_comment": "Fork-local. Shows who claimed a repeater on meshmap.radio-actief.be (owner and managers) in the Repeater info section (needs userManagement). Uses the map's partner claims feed: secret is the partner secret the map operator gives you; it stays on the server and is required. Fetched every refreshMinutes (the map allows at most every 5) with If-None-Match; each fetch replaces the whole list, a failed fetch keeps the last list. Off by default."
   },
   "rfParams": {
     "nodesUrl": "",

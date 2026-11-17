@@ -1,9 +1,12 @@
 package main
 
-// Fork-local (meshmap owner): who runs a repeater, from the public node list
-// of meshmap.radio-actief.be. Fetched every refreshMinutes into memory, served
-// in bulk on GET /api/meshmap/owners; the Repeater info section shows the
-// owner's Discord username. Same shape as known_channels_cache.go: never
+// Fork-local (meshmap owner): who runs a repeater, from the partner claims
+// feed of meshmap.radio-actief.be (contract: docs/PARTNERS.md in the public
+// radio-actief/RRY-Map-Bot repository). Fetched server to server with the
+// partner secret every refreshMinutes into memory, served in bulk on
+// GET /api/meshmap/owners; the Repeater info section shows the owner and
+// managers. Each fetch replaces the whole list (the contract asks partners to
+// drop whatever left the feed). Same shape as known_channels_cache.go: never
 // blocks startup, fail-soft to the last good list, no DB.
 
 import (
@@ -34,14 +37,20 @@ const (
 type MeshmapOwnersConfig struct {
 	Enabled        bool   `json:"enabled"`
 	URL            string `json:"url"`
+	Secret         string `json:"secret"` // partner secret; server side only, never sent to a browser
 	RefreshMinutes int    `json:"refreshMinutes"`
 }
 
-// resolve returns the base URL and refresh interval, and false when the
-// feature is off (nil block or enabled=false).
-func (c *MeshmapOwnersConfig) resolve() (string, time.Duration, bool) {
+// resolve returns the base URL, secret and refresh interval, and false when
+// the feature is off (nil block, enabled=false, or no secret: the feed
+// answers 401 without one).
+func (c *MeshmapOwnersConfig) resolve() (string, string, time.Duration, bool) {
 	if c == nil || !c.Enabled {
-		return "", 0, false
+		return "", "", 0, false
+	}
+	secret := strings.TrimSpace(c.Secret)
+	if secret == "" {
+		return "", "", 0, false
 	}
 	url := strings.TrimRight(strings.TrimSpace(c.URL), "/")
 	if url == "" {
@@ -51,68 +60,115 @@ func (c *MeshmapOwnersConfig) resolve() (string, time.Duration, bool) {
 	if c.RefreshMinutes > 0 {
 		refresh = time.Duration(c.RefreshMinutes) * time.Minute
 	}
-	return url, refresh, true
+	return url, secret, refresh, true
 }
 
-type meshmapOwner struct {
-	Pubkey      string `json:"pubkey"`
-	DiscordName string `json:"discordName"`
+// meshmapPerson is one owner or manager. Name is empty when the person hides
+// their name on meshmap; the UI then shows "claimed" without a name.
+type meshmapPerson struct {
+	Name string `json:"name"`
+}
+
+// meshmapNodeClaims is everyone who claimed one node: at most one owner, any
+// number of managers (named first, by name; hidden names last).
+type meshmapNodeClaims struct {
+	Pubkey   string          `json:"pubkey"`
+	Owner    *meshmapPerson  `json:"owner"`
+	Managers []meshmapPerson `json:"managers"`
 }
 
 type meshmapOwnersResponse struct {
-	Owners    []meshmapOwner `json:"owners"`
-	FetchedAt *time.Time     `json:"fetchedAt"`
-	Source    string         `json:"source"`
+	Nodes     []meshmapNodeClaims `json:"nodes"`
+	FetchedAt *time.Time          `json:"fetchedAt"`
+	Source    string              `json:"source"`
 }
 
-// meshmapNode mirrors the fields of /api/v1/belgian-nodes this feature reads.
-type meshmapNode struct {
-	PublicKey        string  `json:"public_key"`
-	Claimed          bool    `json:"claimed"`
-	DiscordOwnerName *string `json:"discord_owner_name"`
+// meshmapClaimsFeed mirrors the fields of /api/v1/partner/claims this
+// feature reads. Claims is a pointer so a feed without the field (or a
+// literal null) is an error instead of an empty list that wipes every owner.
+type meshmapClaimsFeed struct {
+	Claims *[]meshmapClaim `json:"claims"`
+}
+
+type meshmapClaim struct {
+	PublicKey   string  `json:"publicKey"`
+	Role        string  `json:"role"`
+	DisplayName *string `json:"displayName"`
 }
 
 var meshmapPubkeyRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// parseMeshmapOwners keeps claimed nodes with a valid key and a visible
-// owner name, sorted by pubkey.
-func parseMeshmapOwners(raw []byte) ([]meshmapOwner, error) {
-	var nodes []meshmapNode
-	if err := json.Unmarshal(raw, &nodes); err != nil {
-		return nil, fmt.Errorf("decode meshmap nodes: %w", err)
+// cleanMeshmapName drops control characters, trims, and cuts at 64 runes.
+func cleanMeshmapName(p *string) string {
+	if p == nil {
+		return ""
 	}
-	out := make([]meshmapOwner, 0, len(nodes))
-	for _, n := range nodes {
-		pk := strings.ToLower(strings.TrimSpace(n.PublicKey))
-		if !n.Claimed || n.DiscordOwnerName == nil || !meshmapPubkeyRe.MatchString(pk) {
+	name := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, *p))
+	if r := []rune(name); len(r) > maxMeshmapOwnerNameRunes {
+		name = string(r[:maxMeshmapOwnerNameRunes])
+	}
+	return name
+}
+
+// parseMeshmapClaims groups the feed per node, sorted by pubkey. Claims with
+// an invalid key or an unknown role are skipped.
+func parseMeshmapClaims(raw []byte) ([]meshmapNodeClaims, error) {
+	var feed meshmapClaimsFeed
+	if err := json.Unmarshal(raw, &feed); err != nil {
+		return nil, fmt.Errorf("decode meshmap claims: %w", err)
+	}
+	if feed.Claims == nil {
+		return nil, errors.New("meshmap claims feed has no claims list")
+	}
+	byKey := make(map[string]*meshmapNodeClaims)
+	for _, c := range *feed.Claims {
+		pk := strings.ToLower(strings.TrimSpace(c.PublicKey))
+		if !meshmapPubkeyRe.MatchString(pk) || (c.Role != "owner" && c.Role != "manager") {
 			continue
 		}
-		name := strings.TrimSpace(strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) {
-				return -1
+		n := byKey[pk]
+		if n == nil {
+			n = &meshmapNodeClaims{Pubkey: pk, Managers: []meshmapPerson{}}
+			byKey[pk] = n
+		}
+		person := meshmapPerson{Name: cleanMeshmapName(c.DisplayName)}
+		if c.Role == "owner" {
+			if n.Owner == nil {
+				n.Owner = &person
 			}
-			return r
-		}, *n.DiscordOwnerName))
-		if name == "" {
-			continue
+		} else {
+			n.Managers = append(n.Managers, person)
 		}
-		if r := []rune(name); len(r) > maxMeshmapOwnerNameRunes {
-			name = string(r[:maxMeshmapOwnerNameRunes])
-		}
-		out = append(out, meshmapOwner{Pubkey: pk, DiscordName: name})
+	}
+	out := make([]meshmapNodeClaims, 0, len(byKey))
+	for _, n := range byKey {
+		m := n.Managers
+		sort.SliceStable(m, func(i, j int) bool {
+			if (m[i].Name == "") != (m[j].Name == "") {
+				return m[j].Name == ""
+			}
+			return strings.ToLower(m[i].Name) < strings.ToLower(m[j].Name)
+		})
+		out = append(out, *n)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Pubkey < out[j].Pubkey })
 	return out, nil
 }
 
 type meshmapOwnersSnap struct {
-	owners    []meshmapOwner
+	nodes     []meshmapNodeClaims
 	fetchedAt time.Time
 }
 
 type meshmapOwnersCache struct {
 	ptr     atomic.Pointer[meshmapOwnersSnap]
 	baseURL string
+	secret  string
 	refresh time.Duration
 	client  *http.Client
 	// retryBase is the first wait before retrying a failed first fetch; it
@@ -124,12 +180,13 @@ type meshmapOwnersCache struct {
 	failing bool
 }
 
-func newMeshmapOwnersCache(baseURL string, refresh time.Duration) *meshmapOwnersCache {
+func newMeshmapOwnersCache(baseURL, secret string, refresh time.Duration) *meshmapOwnersCache {
 	if refresh <= 0 {
 		refresh = defaultMeshmapOwnersRefresh
 	}
 	return &meshmapOwnersCache{
 		baseURL:   strings.TrimRight(baseURL, "/"),
+		secret:    secret,
 		refresh:   refresh,
 		client:    &http.Client{Timeout: 30 * time.Second},
 		retryBase: time.Minute,
@@ -137,9 +194,9 @@ func newMeshmapOwnersCache(baseURL string, refresh time.Duration) *meshmapOwners
 }
 
 func (c *meshmapOwnersCache) snapshot() meshmapOwnersResponse {
-	resp := meshmapOwnersResponse{Owners: []meshmapOwner{}, Source: c.baseURL}
+	resp := meshmapOwnersResponse{Nodes: []meshmapNodeClaims{}, Source: c.baseURL}
 	if s := c.ptr.Load(); s != nil {
-		resp.Owners = s.owners
+		resp.Nodes = s.nodes
 		at := s.fetchedAt
 		resp.FetchedAt = &at
 	}
@@ -152,20 +209,21 @@ func (c *meshmapOwnersCache) fetchOnce(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err != nil && !c.failing {
-		log.Printf("[meshmap] owner list fetch failed, keeping the last list: %v", err)
+		log.Printf("[meshmap] claims feed fetch failed, keeping the last list: %v", err)
 	} else if err == nil && c.failing {
-		log.Printf("[meshmap] owner list fetch recovered")
+		log.Printf("[meshmap] claims feed fetch recovered")
 	}
 	c.failing = err != nil
 	return err
 }
 
 func (c *meshmapOwnersCache) fetch(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/belgian-nodes", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/partner/claims", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", "CoreScope-MeshmapOwners/1.0 (+https://github.com/efiten/CoreScope)")
+	req.Header.Set("Authorization", "Bearer "+c.secret)
 	c.mu.Lock()
 	if c.etag != "" && c.ptr.Load() != nil {
 		req.Header.Set("If-None-Match", c.etag)
@@ -178,7 +236,7 @@ func (c *meshmapOwnersCache) fetch(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
 		if s := c.ptr.Load(); s != nil {
-			c.ptr.Store(&meshmapOwnersSnap{owners: s.owners, fetchedAt: time.Now().UTC()})
+			c.ptr.Store(&meshmapOwnersSnap{nodes: s.nodes, fetchedAt: time.Now().UTC()})
 		}
 		return nil
 	}
@@ -190,13 +248,16 @@ func (c *meshmapOwnersCache) fetch(ctx context.Context) error {
 		return err
 	}
 	if len(body) > maxMeshmapOwnersBytes {
-		return errors.New("meshmap node list larger than 10 MB")
+		return errors.New("meshmap claims feed larger than 10 MB")
 	}
-	owners, err := parseMeshmapOwners(body)
+	nodes, err := parseMeshmapClaims(body)
 	if err != nil {
 		return err
 	}
-	c.ptr.Store(&meshmapOwnersSnap{owners: owners, fetchedAt: time.Now().UTC()})
+	if prev := c.ptr.Load(); prev == nil || len(prev.nodes) != len(nodes) {
+		log.Printf("[meshmap] claims feed: %d nodes", len(nodes))
+	}
+	c.ptr.Store(&meshmapOwnersSnap{nodes: nodes, fetchedAt: time.Now().UTC()})
 	c.mu.Lock()
 	c.etag = resp.Header.Get("ETag")
 	c.mu.Unlock()
