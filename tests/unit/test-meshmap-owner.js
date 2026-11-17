@@ -90,6 +90,28 @@ test('names are escaped', async () => {
   assert(!h.includes('<b>') && h.includes('&lt;b&gt;'), h);
 });
 
+const DISCORD = 'https://discord.com/users/123456789012345678';
+
+test('a named person with a Discord profile gets their name as a link to it', async () => {
+  const l = load(feed([{ pubkey: PK, owner: { name: 'erwinfiten', discord: DISCORD },
+    managers: [{ name: 'amy', discord: 'https://discord.com/users/223456789012345678' }, { name: 'zed', discord: '' }] }]));
+  await l.M.ready();
+  const h = l.M.rowHtml({ public_key: PK });
+  assert(h.includes('<a href="' + DISCORD + '" target="_blank" rel="noopener noreferrer" title="Message on Discord">@erwinfiten</a>'), h);
+  assert(h.includes('users/223456789012345678" target="_blank"') && h.includes('@amy</a>, @zed'), h);
+});
+
+test('only a discord.com/users address becomes a link', async () => {
+  const bad = ['javascript:alert(1)', 'https://evil.example/users/123456789012345678',
+    DISCORD + '"><img src=x>', 'http://discord.com/users/123456789012345678', 'https://discord.com/users/abc'];
+  for (const url of bad) {
+    const l = load(feed([{ pubkey: PK, owner: { name: 'erwinfiten', discord: url }, managers: [] }]));
+    await l.M.ready();
+    const h = l.M.rowHtml({ public_key: PK });
+    assert(h.includes('@erwinfiten') && !h.includes('Message on Discord') && !h.includes('<img'), url + ': ' + h);
+  }
+});
+
 test('unknown pubkey gives no row; an uppercase node key still matches', async () => {
   const l = load(feed([node('erwinfiten')]));
   await l.M.ready();
