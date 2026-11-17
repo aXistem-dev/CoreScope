@@ -464,6 +464,15 @@ func main() {
 			cfg.RfParams.NodesURL, cfg.RfParams.PresetsURL, cfg.RfParams.refresh(), cfg.RfParams.maxAge())
 	}
 
+	// Fork-local (meshmap owner): owner names from meshmap.radio-actief.be.
+	if mmURL, mmRefresh, ok := cfg.MeshmapOwners.resolve(); ok {
+		srv.meshmapOwners = newMeshmapOwnersCache(mmURL, mmRefresh)
+		mmCtx, stopMeshmapOwners := context.WithCancel(context.Background())
+		srv.meshmapOwners.run(mmCtx)
+		defer stopMeshmapOwners()
+		log.Printf("[meshmap] owner names enabled (source=%s, refresh=%s)", mmURL, mmRefresh)
+	}
+
 	// Radio line-of-sight profiles and the repeater planner, over one shared
 	// SRTM terrain source. OPT-IN: without los.enabled /api/elevation/profile
 	// answers 404, without planner.enabled /api/planner/* does, and with

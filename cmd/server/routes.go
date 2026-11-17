@@ -156,6 +156,8 @@ type Server struct {
 	// LoRa RF parameters from the MeshCore map (issue #1268). Nil unless
 	// rfParams.nodesUrl is configured.
 	rfParams *rfParamsCache
+	// Fork-local (meshmap owner): nil unless meshmapOwners.enabled.
+	meshmapOwners *meshmapOwnersCache
 	// elevation serves /api/elevation/profile; nil unless los.enabled.
 	elevation *elevationService
 	// planner serves /api/planner/*; nil unless planner.enabled.
@@ -390,6 +392,7 @@ func (s *Server) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/api/channels", s.handleChannels).Methods("GET")
 	r.HandleFunc("/api/known-channels", s.handleKnownChannels).Methods("GET")
 	r.HandleFunc("/api/rf-params", s.handleRfParams).Methods("GET")
+	r.HandleFunc("/api/meshmap/owners", s.handleMeshmapOwners).Methods("GET") // Fork-local (meshmap owner)
 	r.HandleFunc("/api/elevation/profile", s.handleElevationProfile).Methods("GET")
 	r.HandleFunc("/api/planner/profile", s.handlePlannerProfile).Methods("GET")
 	r.HandleFunc("/api/planner/relay", s.handlePlannerRelay).Methods("GET")

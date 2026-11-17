@@ -241,6 +241,10 @@ type Config struct {
 	// OPT-IN: nil or an empty nodesUrl starts no fetch.
 	RfParams *RfParamsConfig `json:"rfParams,omitempty"`
 
+	// Fork-local (meshmap owner): owner names from meshmap.radio-actief.be
+	// (meshmap_owners.go). OPT-IN: nil or enabled=false fetches nothing.
+	MeshmapOwners *MeshmapOwnersConfig `json:"meshmapOwners,omitempty"`
+
 	// Radio line-of-sight on the map's packet route view (los_config.go).
 	// OPT-IN: nil or enabled=false fetches no elevation data.
 	LOS *LOSConfig `json:"los,omitempty"`

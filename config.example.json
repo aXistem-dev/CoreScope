@@ -370,6 +370,12 @@
   },
   "knownChannelsUrl": "",
   "knownChannelsRefreshMs": 86400000,
+  "meshmapOwners": {
+    "enabled": false,
+    "url": "https://meshmap.radio-actief.be",
+    "refreshMinutes": 60,
+    "_comment": "Fork-local. Shows the Discord username of a repeater's owner from the public node list of meshmap.radio-actief.be in the Repeater info section (needs userManagement). Fetched every refreshMinutes with If-None-Match; a failed fetch keeps the last list. Off by default."
+  },
   "rfParams": {
     "nodesUrl": "",
     "presetsUrl": "",
