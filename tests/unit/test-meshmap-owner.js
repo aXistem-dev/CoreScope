@@ -77,16 +77,31 @@ test('link uses the source from the API, with and without a position', () => {
     '0,0 is "no position" in CoreScope');
 });
 
-test('a failed fetch resolves and shows no row; ready() fetches once', async () => {
-  const l = load(new Error('offline'));
-  await l.M.ready();
+test('ready() fetches once after a good answer', async () => {
+  const l = load(owners([{ pubkey: PK, discordName: 'erwinfiten' }]));
+  await Promise.all([l.M.ready(), l.M.ready()]);
   await l.M.ready();
   assert.strictEqual(l.calls.length, 1);
   assert.strictEqual(l.calls[0], '/api/meshmap/owners');
+});
+
+// Review finding: one transient failure must not hide owners for the whole SPA session.
+test('a failed fetch resolves, shows no row, and the next ready() tries again', async () => {
+  const l = load(new Error('offline'));
+  await l.M.ready();
   assert.strictEqual(l.M.rowHtml({ public_key: PK }), '');
+  await l.M.ready();
+  assert.strictEqual(l.calls.length, 2);
   const off = load({ ok: false, body: {} });
   await off.M.ready();
   assert.strictEqual(off.M.rowHtml({ public_key: PK }), '');
+});
+
+test('an answer from before the first server fetch (fetchedAt null) is retried', async () => {
+  const l = load({ body: { owners: [], fetchedAt: null, source: SOURCE } });
+  await l.M.ready();
+  await l.M.ready();
+  assert.strictEqual(l.calls.length, 2);
 });
 
 Promise.all(pending).then(() => {

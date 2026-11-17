@@ -137,6 +137,30 @@ func TestMeshmapOwnersFetchFailureKeepsMap(t *testing.T) {
 	}
 }
 
+// Review finding: a failed first fetch must not leave the list empty for a
+// whole refresh interval; run retries with backoff until the first success.
+func TestMeshmapOwnersRunRetriesFirstFetch(t *testing.T) {
+	ts := fakeMeshmap(t, func(w http.ResponseWriter, r *http.Request, n int) {
+		if n < 3 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Write([]byte(oneOwner))
+	})
+	c := newMeshmapOwnersCache(ts.URL, time.Hour)
+	c.retryBase = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.run(ctx)
+	deadline := time.Now().Add(3 * time.Second)
+	for len(c.snapshot().Owners) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no owners 3s after start: first fetch not retried before the refresh interval")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestMeshmapOwnersRoute(t *testing.T) {
 	srv, router := setupTestServer(t)
 

@@ -115,6 +115,9 @@ type meshmapOwnersCache struct {
 	baseURL string
 	refresh time.Duration
 	client  *http.Client
+	// retryBase is the first wait before retrying a failed first fetch; it
+	// doubles per attempt, capped at refresh (tests shorten it).
+	retryBase time.Duration
 
 	mu      sync.Mutex // guards etag and failing (fetchOnce runs from one goroutine, tests call it directly)
 	etag    string
@@ -126,9 +129,10 @@ func newMeshmapOwnersCache(baseURL string, refresh time.Duration) *meshmapOwners
 		refresh = defaultMeshmapOwnersRefresh
 	}
 	return &meshmapOwnersCache{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		refresh: refresh,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		refresh:   refresh,
+		client:    &http.Client{Timeout: 30 * time.Second},
+		retryBase: time.Minute,
 	}
 }
 
@@ -199,10 +203,23 @@ func (c *meshmapOwnersCache) fetch(ctx context.Context) error {
 	return nil
 }
 
-// run starts the background refresh: one fetch now, then every refresh.
+// run starts the background refresh: one fetch now, retried with backoff
+// (retryBase, doubling, capped at refresh) until the first success, then
+// one every refresh. Without the retries a restart during a meshmap hiccup
+// would show no owners for a whole refresh interval.
 func (c *meshmapOwnersCache) run(ctx context.Context) {
 	go func() {
-		_ = c.fetchOnce(ctx)
+		wait := c.retryBase
+		for c.fetchOnce(ctx) != nil && c.ptr.Load() == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if wait *= 2; wait > c.refresh {
+				wait = c.refresh
+			}
+		}
 		t := time.NewTicker(c.refresh)
 		defer t.Stop()
 		for {

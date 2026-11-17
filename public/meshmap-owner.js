@@ -16,12 +16,15 @@
       }).then(function (r) {
         return r && r.ok ? r.json() : null;
       }).then(function (d) {
-        if (!d || !Array.isArray(d.owners)) return;
+        // No usable list yet (fetch failed, or the server has not fetched
+        // meshmap yet): let the next mount try again instead of hiding the
+        // owners for the rest of the session.
+        if (!d || !Array.isArray(d.owners) || !d.fetchedAt) { loading = null; return; }
         source = String(d.source || '');
         d.owners.forEach(function (o) {
           if (o && o.pubkey && o.discordName) byKey[String(o.pubkey).toLowerCase()] = String(o.discordName);
         });
-      }, function () {});
+      }, function () { loading = null; });
     }
     return loading;
   }
